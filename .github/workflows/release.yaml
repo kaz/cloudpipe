@@ -1,0 +1,94 @@
+name: release
+
+on:
+  push:
+    tags:
+      - v*
+
+env:
+  NAME: cloudpipe
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target:
+          - linux-amd64
+          - darwin-amd64
+          - windows-amd64
+        include:
+          - target: linux-amd64
+            os: ubuntu-latest
+            GOOS: darwin
+            GOARCH: amd64
+          - target: darwin-amd64
+            os: macos-latest
+            GOOS: darwin
+            GOARCH: amd64
+          - target: windows-amd64
+            os: ubuntu-latest
+            GOOS: windows
+            GOARCH: amd64
+    runs-on: ${{ matrix.os }}
+    env:
+      GOOS: ${{ matrix.GOOS }}
+      GOARCH: ${{ matrix.GOARCH }}
+    steps:
+      - uses: actions/setup-go@v2
+      - uses: actions/cache@v1
+        with:
+          path: ~/go/pkg/mod
+          key: go-pkg-mod-${{ matrix.target }}-${{ hashFiles('**/go.sum') }}
+      - uses: actions/checkout@v2
+      - run: |
+          go build -ldflags "-w -s" -o ./${{ env.NAME }}
+      - run: |
+          zip -j ./${{ env.NAME }}-${{ matrix.target }}.zip ./${{ env.NAME }}
+      - uses: actions/upload-artifact@v1
+        with:
+          name: ${{ env.NAME }}-${{ matrix.target }}
+          path: ./${{ env.NAME }}-${{ matrix.target }}.zip
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+      - run: |
+          echo '${{ steps.create_release.outputs.upload_url }}' > ./upload_url
+      - uses: actions/upload-artifact@v1
+        with:
+          name: upload_url
+          path: ./upload_url
+  upload:
+    needs: release
+    strategy:
+      matrix:
+        target:
+          - linux-amd64
+          - darwin-amd64
+          - windows-amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v1
+        with:
+          name: ${{ env.NAME }}-${{ matrix.target }}
+      - uses: actions/download-artifact@v1
+        with:
+          name: upload_url
+      - id: read_url
+        run: |
+          echo "::set-output name=upload_url::$(cat ./upload_url/upload_url)"
+      - uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.read_url.outputs.upload_url }}
+          asset_path: ./${{ env.NAME }}-${{ matrix.target }}/${{ env.NAME }}-${{ matrix.target }}.zip
+          asset_name: ${{ env.NAME }}-${{ matrix.target }}.zip
+          asset_content_type: application/zip
